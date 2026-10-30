@@ -747,10 +747,14 @@
       } catch (error) {
         if (version !== loadVersion || error.name === "AbortError") return;
 
-        $("status").textContent =
-          error.name === "NotAllowedError"
-            ? "Press play to start listening."
-            : "Couldn't play this song. Check the MP3 file or try Next.";
+if (error.name === "NotAllowedError") {
+  $("status").textContent = "Press play to start listening.";
+} else if (audio.error) {
+  showAudioError();
+} else {
+  $("status").textContent =
+    `Playback failed: ${error.name}. ${error.message}`;
+}
 
         updatePlayState();
       }
