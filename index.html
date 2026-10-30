@@ -914,14 +914,41 @@
       }
     });
 
-    audio.addEventListener("error", () => {
-      $("musicPopup").classList.remove("is-playing");
+function showAudioError() {
+  const error = audio.error;
 
-      $("status").textContent =
-        "Song unavailable. Check its MP3 filename, or press Next.";
+  const descriptions = {
+    1: "Audio loading was aborted.",
+    2: "A network error interrupted audio loading.",
+    3: "The browser couldn't decode the audio file.",
+    4: "The audio source couldn't be used. Check the file URL and format."
+  };
 
-      updatePlayState();
-    });
+  const description = error
+    ? descriptions[error.code] || "Unknown audio error."
+    : "No media error details are available yet.";
+
+  const source =
+    audio.currentSrc ||
+    audio.src ||
+    "(No audio URL assigned)";
+
+  $("status").textContent =
+    `${description} Requested URL: ${source}` +
+    (error?.message ? ` Details: ${error.message}` : "");
+
+  console.error("Audio playback failed:", {
+    code: error?.code,
+    message: error?.message,
+    source
+  });
+}
+
+audio.addEventListener("error", () => {
+  $("musicPopup").classList.remove("is-playing");
+  showAudioError();
+  updatePlayState();
+});
 
     document.addEventListener("keydown", (event) => {
       const target = event.target;
