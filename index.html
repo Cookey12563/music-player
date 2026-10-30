@@ -46,7 +46,6 @@
 
     [hidden] { display: none !important; }
 
-    /* PNG stays as the default/fallback background. */
     .background {
       position: fixed;
       inset: 0;
@@ -65,7 +64,6 @@
       );
     }
 
-    /* START BUTTON — same corner as the now-playing card */
     .start-area {
       position: fixed;
       bottom: max(24px, env(safe-area-inset-bottom));
@@ -108,7 +106,7 @@
       text-shadow: 0 2px 8px #000;
     }
 
-    /* NOW PLAYING — no playback controls here */
+    /* NOW-PLAYING TOAST: slides in and out from the left. */
     .now-playing {
       position: fixed;
       bottom: max(24px, env(safe-area-inset-bottom));
@@ -125,6 +123,30 @@
       box-shadow: 0 18px 55px #0005;
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
+      z-index: 4;
+
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateX(
+        calc(-100% - max(24px, env(safe-area-inset-left)) - 60px)
+      );
+
+      transition:
+        transform 450ms cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 300ms ease,
+        visibility 0s linear 450ms;
+    }
+
+    .now-playing.visible {
+      opacity: 1;
+      visibility: visible;
+      transform: translateX(0);
+
+      transition:
+        transform 450ms cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 300ms ease,
+        visibility 0s;
     }
 
     .cover {
@@ -182,8 +204,6 @@
       overflow-wrap: anywhere;
     }
 
-    .song-enter { animation: rise 350ms ease-out; }
-
     /* HIDDEN TOP-RIGHT CONTROL AREA */
     .control-zone {
       position: fixed;
@@ -217,10 +237,6 @@
       pointer-events: auto;
     }
 
-    /*
-      Invisible keyboard-focusable trigger on desktop.
-      Visible as a small button on touchscreens.
-    */
     #controlsToggle {
       display: block;
       width: 35px;
@@ -329,7 +345,7 @@
 
     #volume { width: 70px; height: 3px; margin: 0; }
 
-    /* TOAST */
+    /* Separate status/error messages. */
     #toast {
       position: fixed;
       top: max(24px, env(safe-area-inset-top));
@@ -369,11 +385,6 @@
       clip: rect(0, 0, 0, 0);
       white-space: nowrap;
       border: 0;
-    }
-
-    @keyframes rise {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
     }
 
     @media (hover: none), (pointer: coarse) {
@@ -516,37 +527,29 @@
 
   <script>
     /*
-      PLAYLIST: song1 through song33.
-      This adds 30 slots to the original three.
+      Folders: song1 through song30.
 
-      Required layout for each track:
-
-      songs/song1/song1.mp3
-      songs/song1/song1_cover.jpg
-      songs/song1/song1_info.txt
+      Expected files:
+        songs/song1/song1.mp3
+        songs/song1/song1_cover.jpg
+        songs/song1/song1_info.txt
 
       Info file:
+        -
+        SONG NAME: Your Song Name
+        ARTIST: Your Artist Name
+        -
 
-      -
-      SONG NAME: Your Song Name
-      ARTIST: Your Artist Name
-      -
-
-      Dash lines are optional.
-
-      Metadata comes ONLY from the info text file.
-      Embedded MP3 title/artist tags are not used.
-
-      Background:
-      - background.gif is preferred if it loads.
-      - background.png stays as the fallback.
-      - Album covers use static jpg/png/webp/jpeg files.
+      Covers: jpg, png, webp, or jpeg.
+      Background: background.gif with background.png fallback.
     */
 
     const SONG_FOLDERS = Array.from(
       { length: 30 },
       (_, index) => `song${index + 1}`
     );
+
+    const NOW_PLAYING_DURATION = 5000;
 
     const $ = (id) => document.getElementById(id);
     const audio = $("audio");
@@ -576,9 +579,13 @@
     let toastTimer;
     let metadataWarning = false;
 
+    let nowPlayingTimer;
+    let nowPlayingFrame;
+    let shownTrackVersion = -1;
+
     audio.volume = Number($("volume").value);
 
-    function showToast(message, duration = 4000) {
+    function showToast(message, duration = 5000) {
       clearTimeout(toastTimer);
       $("toast").textContent = message;
       $("toast").classList.add("visible");
@@ -588,8 +595,44 @@
       }, duration);
     }
 
+    function hideNowPlaying() {
+      clearTimeout(nowPlayingTimer);
+      cancelAnimationFrame(nowPlayingFrame);
+      $("nowPlaying").classList.remove("visible");
+    }
+
+    function showNowPlaying(version) {
+      if (version !== loadVersion || shownTrackVersion === version) {
+        return;
+      }
+
+      shownTrackVersion = version;
+
+      clearTimeout(nowPlayingTimer);
+      cancelAnimationFrame(nowPlayingFrame);
+
+      const card = $("nowPlaying");
+      card.hidden = false;
+
+      // Commit its off-screen position before sliding it in.
+      void card.offsetWidth;
+
+      nowPlayingFrame = requestAnimationFrame(() => {
+        if (version !== loadVersion || !started) return;
+
+        card.classList.add("visible");
+
+        nowPlayingTimer = setTimeout(() => {
+          if (version === loadVersion) {
+            card.classList.remove("visible");
+          }
+        }, NOW_PLAYING_DURATION);
+      });
+    }
+
     function formatTime(seconds) {
       if (!Number.isFinite(seconds)) return "0:00";
+
       return `${Math.floor(seconds / 60)}:${String(
         Math.floor(seconds % 60)
       ).padStart(2, "0")}`;
@@ -643,11 +686,6 @@
       }
     }
 
-    /*
-      Check existence without downloading every full song.
-      Tiny files and HTML responses are rejected.
-      Playback errors are handled separately below.
-    */
     async function findTrack(folder) {
       const encoded = encodeURIComponent(folder);
       const base = `./songs/${encoded}/${encoded}`;
@@ -687,7 +725,6 @@
       if (!shuffleBag.length) {
         shuffleBag = shuffle(tracks);
 
-        // Avoid repeating the same song across cycle boundaries.
         if (
           shuffleBag.length > 1 &&
           shuffleBag[0].id === currentTrack?.id
@@ -735,7 +772,6 @@
       $("coverImage").removeAttribute("src");
       $("coverFallback").hidden = false;
 
-      // GIF support is for the background, not album covers.
       for (const extension of ["jpg", "png", "webp", "jpeg"]) {
         if (version !== loadVersion) return;
 
@@ -773,6 +809,8 @@
     function loadTrack(track, addToHistory = true) {
       if (!track) return;
 
+      hideNowPlaying();
+
       currentTrack = track;
       switching = false;
       metadataWarning = false;
@@ -796,10 +834,6 @@
       $("progress").value = 0;
       $("progress").disabled = true;
 
-      $("nowPlaying").classList.remove("song-enter");
-      void $("nowPlaying").offsetWidth;
-      $("nowPlaying").classList.add("song-enter");
-
       displayInfo(track, version);
       displayCover(track, version);
 
@@ -811,19 +845,20 @@
       starting = false;
 
       $("startArea").hidden = true;
-      $("nowPlaying").hidden = false;
       $("controlZone").hidden = false;
 
       showToast(
         matchMedia("(hover: none)").matches
           ? "Music started. Tap the top-right button for controls."
           : "Music started. Hover in the top-right corner for controls.",
-        5500
+        5000
       );
     }
 
     function noSongsLeft() {
       ++loadVersion;
+      hideNowPlaying();
+
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
@@ -883,6 +918,9 @@
         if (version !== loadVersion) return;
 
         if (!started) revealPlayer();
+
+        // Only show once per track load, not on pause/resume.
+        showNowPlaying(version);
         updatePlayButton();
       } catch (error) {
         if (version !== loadVersion || error.name === "AbortError") return;
@@ -909,9 +947,9 @@
     function nextSong() {
       if (!tracks.length) return;
 
-      // If Previous was used, move forward through listening history.
       while (historyPosition < history.length - 1) {
         historyPosition++;
+
         const track = tracks.find(
           (item) => item.id === history[historyPosition]
         );
@@ -935,6 +973,7 @@
 
       while (historyPosition > 0) {
         historyPosition--;
+
         const track = tracks.find(
           (item) => item.id === history[historyPosition]
         );
@@ -983,6 +1022,7 @@
         "aria-label",
         audio.muted ? "Unmute" : "Mute"
       );
+
       $("muteButton").title = audio.muted ? "Unmute" : "Mute";
     }
 
@@ -1068,7 +1108,6 @@
           'url("./background.gif")';
       };
 
-      // If missing or unreadable, the CSS PNG remains.
       gif.src = "./background.gif";
     }
 
@@ -1079,7 +1118,6 @@
 
       const found = [];
 
-      // Check folders in small batches.
       for (let i = 0; i < SONG_FOLDERS.length; i += 6) {
         const batch = await Promise.all(
           SONG_FOLDERS.slice(i, i + 6).map(findTrack)
